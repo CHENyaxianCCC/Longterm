@@ -1,0 +1,676 @@
+---
+title: "Longtern_Rs_analysis"
+output: html_document
+---
+
+## install and load packages
+```{r preliminaries, message=TRUE, include=FALSE, echo=FALSE}
+# Set chunks defaults; these options will be applied to all subsequent chunks
+knitr::opts_chunk$set(results = 'hide', message = TRUE, include = TRUE, echo = FALSE,
+                      fig.height = 4.5, fig.width = 8, cache = T)
+# install.packages('cowplot')
+# Load required packages
+library(cowplot)
+library(data.table)
+library(ggplot2)
+theme_set(theme_bw())
+library(lubridate)
+library(kableExtra)
+library(cowplot)
+# library(knitr)
+library("ggpubr")
+library(reshape)
+# install.packages('Kendall')
+library(zoo)
+library(Kendall)
+library(tidyr)
+library(lubridate)
+library(maps)
+library(mapdata)
+# devtools::install_github("bpbond/cosore")
+library(cosore)
+library(lubridate)
+# Source all needed functions
+source('Rcode/functions.R')
+# Much of this was presented at AGU 2018
+library(readr)
+library(lattice)
+library(mblm)  # for Theil-Sen robust trend test
+library(grid)
+library(hexbin)
+library(dplyr)
+```
+
+
+## prepare and load data
+```{r load data}
+plot_dir <- "outputs/agu_slides/"
+# get data
+srdb_v4 <- drake::readd(srdb_v4) 
+srdb_v5 <- drake::readd(srdb_v5)
+PT_Del <- read.csv('data/GlobalTempPrecipTimeSeries_Del.csv')
+MGRsD = read.csv('data/MGRsD_SRDBV5.csv')
+MGRsD %>% 
+  filter(Rs_Norm > 0 & !is.na(Rs_Norm) & !is.na(MiddleClimate)) %>% 
+  mutate(RsLog = log(Rs_Norm)) ->
+  MGRsD
+longterm <- drake::readd(longterm)
+longterm_Tm <- drake::readd(longterm_Tm)
+IGBP <- read.csv("data/extdata/IGBP_Koppen_MODIS.csv")
+left_join(srdb_v4, IGBP, by = c("Lat_Round" = "Latitude", "Long_Round" = "Longitude")) ->
+  srdb_v4
+
+srdb_v4 %>% 
+  dplyr::select(Q10_all, MiddleClimate) %>% 
+  filter(Q10_all < 10) %>% 
+  na.omit() %>% 
+  group_by (MiddleClimate) %>% 
+  summarise(Q10_mean = mean(Q10_all), obs = n(), se = sd(Q10_all)/sqrt(obs)) ->
+  srdb_v4_agg
+
+# cosore data
+cosore_all <- readRDS("data/cosore_all.rds")
+
+lm_results <- longtern_lm(longterm, longterm_Tm)
+```
+
+
+
+## Find long term (n>4) studies from srdb-v5 and MGRsD
+```{r find out longterm studies from srdb}
+
+# get study number from srdb_v5 which have more than 5 years of Rs measurement
+# 10977 can be read from the fiture
+study_exc <- c(1654,2298,2656,2927,3197,3254,3301,3302,3581,4174,4333,4564,4864,4938,
+               5278,5519,5935,6347,6451,6504,6935,
+               7290,7636,10266,
+               # already in the longterm data
+  
+               # checked in srdb 
+               467,864,1980,2018,2601,2926,2960,
+               3390,4212,4234,4270,4979,5545,5984,6816,7087,
+               7613,8699,8700,9845,10449,10624,10820,10951,10977,11054,11913,
+               
+               # checked in mgrsd
+               4257,4883,5969,6576,7300,7659,9474,11083,11255,11878,11930,
+               
+               # checked github issue
+               4333,4348,10614,10466,11054,
+               
+               # checked srdb by study_number and site_id
+               1891,2056,2904,3053,4018,4442,4894,5162,5688,6438,6975,7634,8479,
+               8534,10066,10483,10564,10910,11366)
+
+
+## Find long term (n>4) studies from MGRsD
+MGRsD %>% 
+  dplyr::select(Study_number, Site_ID, Meas_Year) %>% 
+  group_by(Study_number, Site_ID) %>% 
+  count(Meas_Year) %>% 
+  group_by(Study_number, Site_ID) %>% 
+  summarise(n_year = n()) %>% 
+  filter(n_year > 4) %>% 
+  arrange(Study_number) %>% 
+  filter(Study_number %!in% study_exc)
+
+## Find long term (n>4) studies from srdb-v5
+srdb_v5 %>% 
+  filter(!is.na(Rs_annual)) %>% 
+  dplyr::select(Rs_annual, Study_number, YearsOfData) %>% 
+  count(Study_number, YearsOfData) %>% 
+  filter(YearsOfData>=5 & Study_number %!in% study_exc)
+
+srdb_v5 %>% 
+  filter(!is.na(Rs_annual)) %>% 
+  dplyr::select(Rs_annual, Study_number, Site_ID) %>% 
+  count(Study_number, Site_ID) %>% 
+  filter(Study_number %!in% study_exc) %>% 
+  filter(n > 4)
+```
+
+## Plot long term sites spatial distribution
+```{r site map, fig.height = 4, fig.width = 8}
+# plot a site map for the long term data collected
+# Step 2: Plot
+# sort(unique(counties$region))
+csr_database() %>% 
+    filter(grepl('Rh', CSR_MSMT_VAR)) %>% 
+    mutate(Latitude = CSR_LATITUDE,
+           Longitude = CSR_LONGITUDE,
+           count = year(CSR_DATE_END) - year(CSR_DATE_BEGIN),
+           Data = "COSORE") %>% 
+    dplyr::select(Latitude, Longitude, count, Data) ->
+  csr_rh_site
+
+bind_rows(
+  MGRsD %>% 
+    filter(!is.na(Rs_Norm)) %>% 
+    dplyr::select(Latitude, Longitude, Meas_Year, Study_number) %>% 
+    unique() %>% 
+    group_by(Latitude, Longitude) %>% 
+    summarise(count = n()) %>% 
+    dplyr::select(Latitude, Longitude, count) %>% 
+    mutate(Data = "DGRsD"),
+  
+  srdb_v4 %>% 
+    filter(!is.na(Q10_all) & !is.na(Latitude)) %>% 
+    mutate(Meas_Year = Study_midyear) %>% 
+    dplyr::select(Latitude, Longitude, Meas_Year, Study_number) %>% 
+    unique() %>% 
+    group_by(Latitude, Longitude) %>% 
+    summarise(count = n()) %>% 
+    dplyr::select(Latitude, Longitude, count) %>% 
+    mutate(Data = "SRDB"),
+  
+  csr_rh_site,
+  
+  longterm %>% 
+    dplyr::select(Latitude, Longitude, count) %>% 
+    mutate(Data = "Long-term")) ->
+  map_sites
+
+
+ggplot(data = map_data("world", region = ".", exact = FALSE)) + 
+  geom_polygon(aes(x = long, y = lat, group = group),
+               color = "white", fill = 'gray') + 
+  guides(fill=FALSE) +
+  geom_point(data = map_sites,
+             aes(x=Longitude, y=Latitude,
+                 size = count,
+                 col = Data,
+                 shape = Data),
+             stroke = 1,
+             alpha = 0.75) +
+  geom_point(data = csr_rh_site,
+    aes(x=Longitude, y=Latitude, size = count),
+    col = "#F8766D", alpha = 0.75) +
+  scale_shape_manual(values = c(16, 17, 1, 4)) +
+  scale_x_continuous(name="Longitude", breaks=seq(-180,180, 60),labels = seq(-180,180, 60))+
+  scale_y_continuous(limits = c(-60, 90),name="Latitude", breaks=seq(-60,90,30),labels = seq(-60,90,30)) +
+  scale_size_continuous(name = "Years (n)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) -> site_plot1
+
+# only plot longterm sites
+ggplot(data = map_data("world", region = ".", exact = FALSE)) + 
+  geom_polygon(aes(x = long, y = lat, group = group),
+               color = "white", fill = 'gray') + 
+  guides(fill=FALSE) +
+  geom_point(data = longterm,
+             aes(x=Longitude, y=Latitude,
+                 size = count),
+             stroke = 1,
+             col = "blue", alpha = 0.75) +
+  scale_x_continuous(name="Longitude", breaks=seq(-180,180, 60),labels = seq(-180,180, 60))+
+  scale_y_continuous(limits = c(-60, 90),
+                     name="Latitude", breaks=seq(-60,90,30),
+                     labels = seq(-60,90,30)) +
+  scale_size_continuous(name = "Years (n)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) -> site_plot2
+
+site_plot2
+
+```
+
+## plot temperature annomaly
+```{r, fig.width=8, fig.height=6}
+# temperature annomaly time series
+PT_Del %>% 
+  ggplot(aes(Year, Tm_Annomaly)) +
+  geom_bar(stat = "identity", alpha = 0.85, fill = "white", color = "black") +
+  geom_smooth(color = "red", method = "lm", se = FALSE) +
+  geom_smooth(color = "blue", method = "loess", se = FALSE, linetype = 2) +
+  facet_wrap(~MiddleClimate, nrow = 4, scales = "free") +
+  labs(x = "Year (1961-2014)", 
+       y = expression(T[Air]~anomaly~(degree~C)))
+# ggsave("outputs/FigureSX. T anomaly.jpg", width = 8, height = 6, dpi = 300, units = "in")
+```
+
+
+## plot Rs time series linear model results
+```{r lm results}
+lm_results$first_b %>% mean()
+lm_results$n %>% mean()
+lm_results$first_b_tm %>% mean()
+
+lm_results %>% 
+  ggplot(aes(x=first_b_tm, y=first_b)) +
+  geom_point(aes(size = n), alpha = 0.75, col = "gray") +
+  labs(x = expression(Slope~of~air~temperature~(degree~C~year^-1)),
+       y = expression(Slope~of~soil~respiration~(g~C~m^-2~year^-1))) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "red", size = 1) +
+  geom_pointrange(aes(ymin = first_b - 2*first_b_se,
+                      ymax = first_b + 2*first_b_se),
+                  col = "gray",
+                  show.legend = FALSE) +
+  geom_smooth(mapping = aes(x=first_b_tm, y=first_b),
+              method = "lm",
+              se = T, fill = "skyblue",
+              show.legend = FALSE) +
+  guides(size = guide_legend("Year (n)")) -> plot_lm_results
+
+## add average dot
+lm_results_mean <- 
+  tibble(tm_slope_mean = lm_results$first_b_tm %>% mean(),
+         Rs_slope_mean = lm_results$first_b %>% mean(),
+         Rs_slope_se_mean = lm_results$first_b_se %>% mean(),
+         Year_mean = lm_results$n %>% mean())
+
+plot_lm_results +
+  geom_point(aes(x = tm_slope_mean, y = Rs_slope_mean),
+             col = "black", size = 3.5, data = lm_results_mean) +
+  geom_segment(aes(x = tm_slope_mean, y = Rs_slope_mean-2*Rs_slope_se_mean,
+                   xend = tm_slope_mean, yend = Rs_slope_mean+2*Rs_slope_se_mean),
+               col = "black", size = 1,
+               data = lm_results_mean) -> plot_lm_results
+
+plot_lm_results 
+
+lm(first_b ~ first_b_tm, data = lm_results) %>% summary()
+```
+
+## plot Rs time series linear model results
+### only plot results with p < 0.05
+```{r lm plot2}
+lm_results %>% 
+  filter(p_b < 0.05 & first_b_tm > 0) -> lm_results_sub
+
+lm_results_sub %>% 
+  ggplot(aes(x=first_b_tm, y=first_b)) +
+  geom_point(aes(size = n), alpha = 0.75, col = "gray") +
+  labs(x = expression(Slope~of~air~temperature~(degree~C~year^-1)),
+       y = expression(Slope~of~soil~respiration~(g~C~m^-2~year^-1))) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "red", size = 1) +
+  geom_pointrange(aes(ymin = first_b - 2*first_b_se,
+                      ymax = first_b + 2*first_b_se),
+                  col = "gray",
+                  show.legend = FALSE) +
+  geom_smooth(mapping = aes(x=first_b_tm, y=first_b),
+              method = "lm",
+              se = T, fill = "skyblue",
+              show.legend = FALSE) +
+  guides(size = guide_legend("Year (n)")) -> plot_lm_results_sub 
+
+lm(first_b ~ first_b_tm, data = lm_results_sub) %>% summary()
+
+## add average dot
+lm_results_mean_sub <- 
+  tibble(tm_slope_mean = lm_results_sub$first_b_tm %>% mean(),
+         Rs_slope_mean = lm_results_sub$first_b %>% mean(),
+         Rs_slope_se_mean = lm_results_sub$first_b_se %>% mean(),
+         Year_mean = lm_results_sub$n %>% mean())
+
+plot_lm_results_sub +
+  geom_point(aes(x = tm_slope_mean, y = Rs_slope_mean),
+             col = "black", size = 3.5, data = lm_results_mean_sub) +
+  geom_segment(aes(x = tm_slope_mean, y = Rs_slope_mean-2*Rs_slope_se_mean,
+                   xend = tm_slope_mean, yend = Rs_slope_mean+2*Rs_slope_se_mean),
+               col = "black", size = 1,
+               data = lm_results_mean_sub) -> plot_lm_results_sub
+
+plot_lm_results_sub
+
+```
+
+
+## Possible reason 1 - need long time (~100 years) to observe a significant trend
+There are measure variations during soil respiration measuring activities, and the variabilitty could generally seperated into two types: measure variability from interannual variability and from instantaneous variability.
+
+### What's the SRDB interannual variability?
+```{r srdb, echo=FALSE}
+srdb_v5$Rs_interann_cv <- with(srdb_v5, Rs_interann_err / Rs_annual)
+median_interann_cv <- median(srdb_v5$Rs_interann_cv, na.rm = TRUE)
+
+srdb_v5 %>% 
+  filter(!is.na(Rs_interann_cv)) -> srdb_v5_sub
+
+srdb_v5 %>% 
+  filter(!is.na(Rs_interann_cv)) %>% 
+  ggplot(aes(x = Rs_interann_cv)) + 
+  geom_histogram(bins = 30, fill = 'gray', col = "black") +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+  geom_vline(xintercept = median_interann_cv, color = "red") +
+  ylab("Count") + 
+  xlab("CV between successive years") ->
+  plot_annual_cv
+
+plot_annual_cv
+  
+# save_agu_plot("srdb_cv.png")
+
+```
+
+OK, so the median measurement error here is ~`r round(median_interann_cv * 100, 0)`% for `r nrow(srdb_v5_sub)` observations of fluxes between `r round(min(srdb_v5_sub$Rs_annual, na.rm = T))` and `r round(max(srdb_v5_sub$Rs_annual, na.rm = T))` g C/m2/year.
+
+
+### What's the CV within COSORE variability?
+
+```{r cv12, echo = FALSE}
+cosore_all %>% 
+  mutate(ID_day = paste0(dset, "-", CSR_PORT, "-", year(CSR_TIMESTAMP_END),"-",
+                         month(CSR_TIMESTAMP_END), "-", day(CSR_TIMESTAMP_END))) %>% 
+  group_by(ID_day) %>%
+  summarise(n = n(), meanFlux = mean(CSR_FLUX_CO2),
+            cv = sd(CSR_FLUX_CO2) / mean(CSR_FLUX_CO2)) %>% 
+  filter(n > 2) ->
+  meas_error_1
+median_error <- median(meas_error_1$cv)
+
+ggplot(meas_error_1, aes(x = cv)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  scale_x_continuous(labels = scales::percent, limits = c(-0.1, 1)) +
+  geom_vline(xintercept = median_error, color = "red") +
+  ylab("Count") + 
+  xlab("CV between successive IRGA measurements") -> plot_IRGA_cv
+
+plot_IRGA_cv
+# save_agu_plot("licor12_cv.png")
+```
+
+OK, so the median measurement error here is ~`r round(median_error * 100, 0)`% for `r nrow(meas_error_1)` observations of fluxes between `r round(min(meas_error_1$meanFlux), 2)` and `r round(max(meas_error_1$meanFlux), 2)` µmol/m2/s.
+
+## What if the meaure error was added to the soil respiration trend?
+### Need to use data from Jian et al (2017) Earth's Future paper replace Hashimoto's data
+```{r hashimoto, echo=FALSE}
+library(ncdf4)
+# Downloaded August 25, 2017 from http://cse.ffpri.affrc.go.jp/shojih/data/index.html
+ncfiles <- c("data/extdata/RH_yr_Hashimoto2015.nc",
+             "data/extdata/RS_yr_Hashimoto2015.nc")
+
+nc <- nc_open(ncfiles[1])  # change to [1]
+# These annual data start in 1901; extract 1990-2012
+co2 <- ncvar_get(nc, "co2", start = c(1, 1, 1, 90), count = c(-1, -1, 1, 23))
+nc_close(nc)
+
+lattice::levelplot(co2[,,1])
+
+
+co2 <- co2[400:600, 220:360,]  # punch a hole for testing: North America
+# co2 <- co2[500:540, 320:360,]  # punch a hole for testing: part of North America
+
+# below is a function for time series analysis
+do_fitting <- function(co2) {
+  
+  f <- function(rh) { 
+    df <- data.frame(x = seq_along(rh), y = rh)
+    tryCatch(lm(y ~ x, data = df), error = function(e) NA)
+  }
+  
+  # Fit linear model to each grid cell (this is slow)
+  mods <- apply(co2, c(1, 2), FUN = f)  # slow
+  
+  # Extract slopes
+  slopes <- apply(mods, c(1, 2), FUN = function(x) 
+    if(!is.na(x)) x[[1]]$coefficients[["x"]] else NA)
+  slopes <- matrix(slopes, nrow = nrow(mods), ncol = ncol(mods))
+  
+  # Extract slope p-values
+  signif <- apply(mods, c(1, 2), FUN = function(x) 
+    if(!is.na(x)) summary(x[[1]])$coefficients["x", "Pr(>|t|)"] else NA)
+  signif <- matrix(signif, nrow = nrow(mods), ncol = ncol(mods))
+  
+  return(list(slopes = slopes, signif = signif))
+}
+
+# fitting and store at out
+out <- do_fitting(co2)
+summary(as.vector(out$slopes))
+
+# plot out the fitting result
+lattice::levelplot(out$slopes > 0)
+
+
+lattice::levelplot(out$signif < 0.05)
+
+
+ncells <- sum(!is.na(out$slopes))
+pos_slope <- sum(out$slopes > 0, na.rm = TRUE)
+signif_pos_slope <- sum(out$slopes > 0 & out$signif < 0.05, na.rm = TRUE)
+
+lat_weight <- abs(cos(seq(-pi/2, pi/2, length.out = nrow(out$slopes))))
+ncells_areawt <- sum(lat_weight * ncol(out$slopes))
+pos_slope_areawt <- sum(out$slopes > 0 * lat_weight, na.rm = TRUE)
+signif_pos_slope_areawt <- sum(out$slopes > 0 & out$signif < 0.05 * lat_weight, na.rm = TRUE)
+
+# plot histgram
+tibble(signif = as.vector(unlist(out$signif))) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = signif)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  # geom_vline(xintercept = 0.05, color = "red") +
+  ylab("Count") + 
+  xlab("p value of time series trend") ->
+  plot_signif_before
+
+plot_signif_before
+```
+
+Total cells = `r ncells`.
+
+Cells with positive slope = `r pos_slope` or `r round(pos_slope / ncells * 100, 0)`%.
+
+Cells with _significant_ positive slope = `r signif_pos_slope` or `r round(signif_pos_slope / ncells * 100, 0)`%.
+
+Area with positive slope = `r round(pos_slope_areawt / ncells_areawt * 100, 0)`%.
+
+Area with _significant_ positive slope = `r round(signif_pos_slope_areawt / ncells_areawt * 100, 0)`%.
+
+
+## Re-do analysis with assumed error rate
+```{r fuzz, echo=FALSE}
+
+co2_fuzz <- fuzz(co2, error = median_error)
+out_fuzz <- do_fitting(co2_fuzz)
+
+
+lattice::levelplot(out_fuzz$slopes > 0)
+
+
+lattice::levelplot(out_fuzz$signif < 0.05)
+
+
+# plot histgram after cv added
+tibble(signif = as.vector(unlist(out_fuzz$signif))) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = signif)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  # geom_vline(xintercept = 0.05, color = "red") +
+  ylab("Count") + 
+  xlab("p value of time series trend") ->
+  plot_signif_after
+
+plot_signif_after
+
+ncells <- sum(!is.na(out_fuzz$slopes))
+pos_slope <- sum(out_fuzz$slopes > 0, na.rm = TRUE)
+signif_pos_slope <- sum(out_fuzz$slopes > 0 & out_fuzz$signif < 0.05, na.rm = TRUE)
+
+lat_weight <- abs(cos(seq(-pi/2, pi/2, length.out_fuzz = nrow(out_fuzz$slopes))))
+ncells_areawt <- sum(lat_weight * ncol(out_fuzz$slopes))
+pos_slope_areawt <- sum(out_fuzz$slopes > 0 * lat_weight, na.rm = TRUE)
+signif_pos_slope_areawt <- sum(out_fuzz$slopes > 0 & out_fuzz$signif < 0.05 * lat_weight, na.rm = TRUE)
+
+# Convert to a data frame for ggplot2 plotting
+ro = nrow(co2_fuzz)
+co = ncol(co2_fuzz)
+yr = dim(co2_fuzz)[3]
+co2_fuzz_df <- tibble(
+  flux = as.vector(co2_fuzz),
+  lat = rep(seq_len(ro), times = co * yr),
+  lon = rep(rep(seq_len(co), each = ro), times = yr),
+  year = rep(seq_len(yr), each = ro * co),
+  p = rep(as.vector(out_fuzz$signif), times = yr)
+)
+
+co2_fuzz_df %>% 
+  filter(!is.na(p)) %>% 
+  # pick a subset of grid cells for a readable plot
+  distinct(lon, lat) %>% 
+  sample_n(250) %>% 
+  left_join(co2_fuzz_df, by = c("lon", "lat")) ->
+  co2_fuzz_subsampled
+
+co2_fuzz_subsampled %>% 
+  ggplot(aes(year + 1990, flux, group = paste(lat, lon))) + 
+  geom_line(color = "lightgrey") +
+  xlab("Year") + ylab(expression(R[S]~(g~C~m^{-2}~yr^{-1}))) +
+  geom_line(data = filter(co2_fuzz_subsampled, p < 0.05), color = "red", alpha = I(0.5)) ->
+  fuzz_time_series
+
+fuzz_time_series
+# save_agu_plot("fuzz_over_time.png")
+```
+
+Cells with _significant_ positive slope (observations with `r round(median_error * 100, 0)`% measurement error) = `r signif_pos_slope` or `r round(signif_pos_slope / ncells * 100, 0)`%.
+
+Area with _significant_ positive slope = `r round(signif_pos_slope_areawt / ncells_areawt * 100, 0)`%.
+
+
+## Next steps
+Next: make a nice graph of change over time <br>
+using a subset of data for readability <br>
+Convert array to data frame and plot rs versus time <br>
+with a line for each grid cell <br>
+
+
+## Simple: when would expect to see significance? toy-example
+* We'd like to do this once for perfect data
+* Once for data + interannual variability
+* Once for data + iav + observational error
+
+```{r simple toy-example, echo=FALSE}
+set.seed(1234)
+
+trend_emergence <- function(rd, theilsen = F) {
+  Year <- seq_len(length(rd))
+  trend_p <- rep(NA, length(rd))
+  for(i in seq_along(trend_p)) {
+    if(i > 2) {
+      if(theilsen) {
+        df <- tibble(Year = Year[1:i], rd = rd[1:i])
+        suppressWarnings(m <- mblm::mblm(rd ~ Year, data = df))  # mblm doesn't like form below
+      } else {
+        m <- suppressWarnings(lm(rd[1:i] ~ Year[1:i]))
+      }
+      # Extract 2nd row (Year) and 4th column (Pr>[t] or Pr>|V|)
+      trend_p[i] <- summary(m)$coefficients[2, 4]
+    }
+  }
+  trend_p
+}
+
+
+# Temperature has risen 0.9 C in 40 years, more or less
+dTdt <- round(0.9 / 40.0, 3)
+q10 <- 2
+R0 = 1.0
+respdata <- tibble(Year = 1:100,
+                   Temp = dTdt * Year,
+                   Resp = R0 * q10 ^ (Temp / 10),
+                   # This is interannual variability
+                   Resp_iav = fuzz(Resp, 0.098),  # this is SRDB Rs_interannual_err
+                   Resp_fuzz = fuzz(Resp_iav, median_error))
+
+# Make a nice plot--first with ideal curve, 
+p <- ggplot(respdata, aes(Year, Resp)) + 
+  geom_point(color = "grey") + 
+  ylab("Respiration") + coord_cartesian(ylim = c(0.75, 1.5)) + 
+  annotate("text", 10, 1.4, label = paste("Q10 =", q10)) + 
+  annotate("text", 10, 1.3, label = paste("dT/dt =", dTdt))
+p
+
+# then IAV
+p <- p + geom_point(aes(y = Resp_iav))
+p
+
+# then observations
+p <- p + 
+  geom_errorbar(aes(ymin = Resp_iav - Resp_iav * median_error,
+                    ymax = Resp_iav + Resp_iav * median_error))
+p
+
+# add idea trend line
+p + geom_line(aes(y = Resp), color = "red", size = 2)
+
+# add line with interannual variability
+p + geom_line(aes(y = Resp), color = "pink", size = 2) +
+  geom_line(aes(y = Resp_iav), color = "red", size = 2)
+
+# add real soil respiration observation trend
+p + geom_line(aes(y = Resp), color = "pink", size = 2) +
+  geom_line(aes(y = Resp_iav), color = "pink", size = 2) +
+  geom_line(aes(y = Resp_fuzz), color = "red", size = 2)
+
+# creat a function for trend analysis
+do_sim <- function(i, respdata, error = 0.0) {
+  # This is observational error
+  respdata$Resp_fuzz <- fuzz(respdata$Resp_iav, error)
+  respdata$trend_p <- trend_emergence(respdata$Resp_fuzz)
+  respdata
+}
+
+# run the analysis and store the results
+results <- list()
+library(parallel)
+n_sims <- 100
+results <- mclapply(seq_len(n_sims), do_sim, respdata, error = median_error)
+
+# summary results
+results %>% 
+  bind_rows %>% 
+  group_by(Year) %>% 
+  summarise(n = n(), 
+            Temp = mean(Temp), 
+            Resp = mean(Resp),
+            Resp_iav_sd = sd(Resp_iav),
+            Resp_iav = mean(Resp_iav),
+            Resp_fuzz_sd = sd(Resp_fuzz),          
+            Resp_fuzz = mean(Resp_fuzz), 
+            trend_p_sd = sd(trend_p), 
+            trend_p = mean(trend_p)) %>% 
+  filter(!is.na(trend_p)) ->
+  results_summary
+
+# plot the trend analysis result
+p_TheilSen <- ggplot(results_summary, aes(Year, trend_p, color = trend_p < 0.05)) +
+  geom_point() +
+  geom_line(aes(y = Resp_fuzz)) +
+  geom_line(aes(y = Resp), color = "grey") +
+  geom_ribbon(aes(ymin = Resp_fuzz - Resp_fuzz_sd, 
+                  ymax = Resp_fuzz + Resp_fuzz_sd, 
+                  fill = trend_p < 0.05), color = NA, alpha = I(0.35)) +
+  guides(color = FALSE, fill = FALSE) +
+  annotate("text", 10, 1.5, label = paste("N =", n_sims)) +
+  ylab("Theil-sen p-value   ///   Respiration")
+
+print(p_TheilSen)
+# save_agu_plot("simple_sim.png")
+```
+
+
+
+```{r, fig.height=8, fig.width=8}
+# put figures together
+plot_grid(fuzz_time_series, p_TheilSen,
+          ncol = 1,
+          labels = c("a", "b"))
+```
+
+```{r, fig.height=8, fig.width=8}
+plot_grid(plot_IRGA_cv, plot_annual_cv) ->
+  plot_cv
+# put figures together
+plot_grid(plot_signif_before, plot_cv, plot_signif_after,
+          ncol = 1,
+          labels = c("a", "b", "c"))
+```
+
+
+We then analyzed the trend of annual RS time series for all grid cells (n=`r ncells`). The results tuen out that about `r signif_pos_slope`% cells (Figure S7, panel a) showed a significant (p<0.05) possitive trend. However, in the field experiment, measurement error should be considered. We obtained the annual RS interannual variability from the newest version of global soil respiration database (SRDB-V5). In addition, we obtained the instantaneous RS flux measurement variability from a community database for continuous soil respiration and other soil-atmosphere greenhouse gas flux data (COSORE23). The results show that RS interannual variability is about `r round(median_interann_cv,2)*100`% of annual RS, and instantaneous RS flux measurement variability is about `r round(median_error, 2)*100`% of measurement mean (Figure S7, panel b). When RS measurement variability was considered, only ~`r round (signif_pos_slope / ncells * 100, 0)`% (Figure S7, panel c) of cells showed a significant increase trend.
+
+
+
+
+
+

@@ -1,0 +1,45 @@
+# History files
+.Rhistory
+.Rapp.history
+
+# Session Data files
+.RData
+
+# Example code in package build process
+*-Ex.R
+
+# Output files from R CMD build
+/*.tar.gz
+
+# Output files from R CMD check
+/*.Rcheck/
+
+# Temporary files created by R markdown
+*.utf8.md
+*.knit.md
+
+# Shiny token, see https://shiny.rstudio.com/articles/shinyapps.html
+rsconnect/
+.Rproj.user
+
+# Script products
+logs/
+outputs/
+
+# OS files
+.DS_Store
+
+
+# Exclude Rmarkdown caches and images
+*_cache/
+/*_cache/
+/cache/
+*_files/
+*.html
+
+# Exclude folders 
+old/
+manuscript/
+data/
+refs/
+srdbv4/
