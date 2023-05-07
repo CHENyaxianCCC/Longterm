@@ -28,7 +28,7 @@ library(lubridate)
 library(maps)
 library(mapdata)
 # devtools::install_github("bpbond/cosore")
-library(cosore)
+# library(cosore)
 library(lubridate)
 # Source all needed functions
 source('Rcode/functions.R')
@@ -55,6 +55,7 @@ MGRsD %>%
   mutate(RsLog = log(Rs_Norm)) ->
   MGRsD
 longterm <- drake::readd(longterm)
+longterm <- longterm %>% filter(!is.na(X1))
 longterm_Tm <- drake::readd(longterm_Tm)
 IGBP <- read.csv("data/extdata/IGBP_Koppen_MODIS.csv")
 left_join(srdb_v4, IGBP, by = c("Lat_Round" = "Latitude", "Long_Round" = "Longitude")) ->
@@ -70,6 +71,9 @@ srdb_v4 %>%
 
 # cosore data
 cosore_all <- readRDS("data/cosore_all.rds")
+cosore_site <- read.csv("data/csr_site.csv")
+cosore_site$CSR_DATE_BEGIN <- as.Date(cosore_site$CSR_DATE_BEGIN, "%m/%d/%Y")
+cosore_site$CSR_DATE_END <- as.Date(cosore_site$CSR_DATE_END, "%m/%d/%Y")
 
 lm_results <- longtern_lm(longterm, longterm_Tm)
 ```
@@ -133,7 +137,7 @@ srdb_v5 %>%
 # plot a site map for the long term data collected
 # Step 2: Plot
 # sort(unique(counties$region))
-csr_database() %>% 
+cosore_site %>% 
     filter(grepl('Rh', CSR_MSMT_VAR)) %>% 
     mutate(Latitude = CSR_LATITUDE,
            Longitude = CSR_LONGITUDE,
