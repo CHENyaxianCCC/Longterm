@@ -1,0 +1,933 @@
+---
+title: "Longtern_Rs_analysis"
+output: html_document
+---
+
+## install and load packages
+
+```{r preliminaries, message=TRUE, include=FALSE, echo=FALSE}
+# Set chunks defaults; these options will be applied to all subsequent chunks
+knitr::opts_chunk$set(results = 'hide', message = TRUE, include = TRUE, echo = FALSE,
+                      fig.height = 4.5, fig.width = 8, cache = T)
+# install.packages('cowplot')
+# Load required packages
+library(cowplot)
+library(data.table)
+library(ggplot2)
+theme_set(theme_bw())
+library(lubridate)
+library(kableExtra)
+library(cowplot)
+# library(knitr)
+library("ggpubr")
+library(reshape)
+# install.packages('Kendall')
+library(zoo)
+library(Kendall)
+library(tidyr)
+library(lubridate)
+library(maps)
+library(mapdata)
+# devtools::install_github("bpbond/cosore")
+# library(cosore)
+library(lubridate)
+# Source all needed functions
+source('Rcode/functions.R')
+# Much of this was presented at AGU 2018
+library(readr)
+library(lattice)
+library(mblm)  # for Theil-Sen robust trend test
+library(grid)
+library(hexbin)
+library(dplyr)
+```
+
+## load functions
+```{r}
+library(readxl)
+source('Rcode/functions.R')
+```
+
+## prepare and load data
+
+```{r load data}
+plot_dir <- "outputs/agu_slides/"
+# get data
+# srdb_v4 <- drake::readd(srdb_v4) 
+srdb_v4 <- read.csv('srdbv4/srdbv4.csv', stringsAsFactors=F)
+# srdb_v5 <- drake::readd(srdb_v5)
+srdb_v5 <- read.csv('data/srdb-data.csv', stringsAsFactors=F)
+PT_Del <- read.csv('data/GlobalTempPrecipTimeSeries_Del.csv')
+# LongTerm <- read.csv('data/LongTerm.csv')
+longterm = read_xlsx('LongTerm.xlsx', 1)
+# longterm_Tm <- read.csv('data/LongTerm_tm.csv')
+longterm_Tm = read_xlsx('LongTerm.xlsx', 2)
+# longterm <- drake::readd(LongTerm)
+# longterm_Tm <- drake::readd(LongTerm_tm)
+
+
+MGRsD = read.csv('data/MGRsD_SRDBV5.csv')
+MGRsD %>% 
+  filter(Rs_Norm > 0 & !is.na(Rs_Norm) & !is.na(MiddleClimate)) %>% 
+  mutate(RsLog = log(Rs_Norm)) ->
+  MGRsD
+
+longterm <- longterm %>% filter(!is.na(X1))
+
+IGBP <- read.csv("data/extdata/IGBP_Koppen_MODIS.csv")
+left_join(srdb_v4, IGBP, by = c("Lat_Round" = "Latitude", "Long_Round" = "Longitude")) ->
+  srdb_v4                                             
+
+srdb_v4 %>% 
+  dplyr::select(Q10_all, MiddleClimate) %>% 
+  filter(Q10_all < 10) %>% 
+  na.omit() %>% 
+  group_by (MiddleClimate) %>% 
+  summarise(Q10_mean = mean(Q10_all), obs = n(), se = sd(Q10_all)/sqrt(obs)) ->
+  srdb_v4_agg
+
+# cosore data
+cosore_all <- readRDS("data/cosore_all.rds")
+cosore_site <- read.csv("data/csr_site.csv")
+cosore_site$CSR_DATE_BEGIN <- as.Date(cosore_site$CSR_DATE_BEGIN, "%m/%d/%Y")
+cosore_site$CSR_DATE_END <- as.Date(cosore_site$CSR_DATE_END, "%m/%d/%Y")
+
+
+lm_results <- longtern_lm(longterm, longterm_Tm)
+
+#longterm, longterm_Tm都更新了，但是lm_results报错Backtrace: 1. global longtern_lm(longterm, longterm_Tm  10. dplyr:::dplyr_internal_error(...)？？
+
+```
+
+## Find long term (n\>4) studies from srdb-v5 and MGRsD
+
+```{r find out longterm studies from srdb}
+
+# get study number from srdb_v5 which have more than 5 years of Rs measurement
+# 10977 can be read from the fiture
+study_exc <- c(1654,2298,2656,2927,3197,3254,3301,3302,3581,4174,4333,4564,4864,4938,
+               5278,5519,5935,6347,6451,6504,6935,
+               7290,7636,10266,
+               # already in the longterm data
+  
+               # checked in srdb 
+               467,864,1980,2018,2601,2926,2960,
+               3390,4212,4234,4270,4979,5545,5984,6816,7087,
+               7613,8699,8700,9845,10449,10624,10820,10951,10977,11054,11913,
+               
+               # checked in mgrsd
+               4257,4883,5969,6576,7300,7659,9474,11083,11255,11878,11930,
+               
+               # checked github issue
+               4333,4348,10614,10466,11054,
+               
+               # checked srdb by study_number and site_id
+               1891,2056,2904,3053,4018,4442,4894,5162,5688,6438,6975,7634,8479,
+               8534,10066,10483,10564,10910,11366)
+
+
+## Find long term (n>4) studies from MGRsD
+MGRsD %>% 
+  dplyr::select(Study_number, Site_ID, Meas_Year) %>% 
+  group_by(Study_number, Site_ID) %>% 
+  count(Meas_Year) %>% 
+  group_by(Study_number, Site_ID) %>% 
+  summarise(n_year = n()) %>% 
+  filter(n_year > 4) %>% 
+  arrange(Study_number) %>% 
+  filter(Study_number %!in% study_exc)
+
+## Find long term (n>4) studies from srdb-v5
+srdb_v5 %>% 
+  filter(!is.na(Rs_annual)) %>% 
+  dplyr::select(Rs_annual, Study_number, YearsOfData) %>% 
+  count(Study_number, YearsOfData) %>% 
+  filter(YearsOfData>=5 & Study_number %!in% study_exc)
+
+srdb_v5 %>% 
+  filter(!is.na(Rs_annual)) %>% 
+  dplyr::select(Rs_annual, Study_number, Site_ID) %>% 
+  count(Study_number, Site_ID) %>% 
+  filter(Study_number %!in% study_exc) %>% 
+  filter(n > 4)
+```
+
+## Plot long term sites spatial distribution
+
+```{r site map, fig.height = 4, fig.width = 8}
+# plot a site map for the long term data collected
+# Step 2: Plot
+# sort(unique(counties$region))
+cosore_site %>% 
+    filter(grepl('Rh', CSR_MSMT_VAR)) %>% 
+    mutate(Latitude = CSR_LATITUDE,
+           Longitude = CSR_LONGITUDE,
+           count = year(CSR_DATE_END) - year(CSR_DATE_BEGIN),
+           Data = "COSORE") %>% 
+    dplyr::select(Latitude, Longitude, count, Data) ->
+  csr_rh_site
+
+bind_rows(
+  MGRsD %>% 
+    filter(!is.na(Rs_Norm)) %>% 
+    dplyr::select(Latitude, Longitude, Meas_Year, Study_number) %>% 
+    unique() %>% 
+    group_by(Latitude, Longitude) %>% 
+    summarise(count = n()) %>% 
+    dplyr::select(Latitude, Longitude, count) %>% 
+    mutate(Data = "DGRsD")
+)
+  
+  srdb_v4 %>% 
+    filter(!is.na(Q10_all) & !is.na(Latitude)) %>% 
+    mutate(Meas_Year = Study_midyear) %>% 
+    dplyr::select(Latitude, Longitude, Meas_Year, Study_number) %>% 
+    unique() %>% 
+    group_by(Latitude, Longitude) %>% 
+    summarise(count = n()) %>% 
+    dplyr::select(Latitude, Longitude, count) %>% 
+    mutate(Data = "SRDB")
+  
+  csr_rh_site
+  
+  longterm %>% 
+    dplyr::select(Latitude, Longitude, count) %>% 
+    mutate(Data = "Long-term") ->
+  map_sites
+
+
+ggplot(data = map_data("world", region = ".", exact = FALSE)) + 
+  geom_polygon(aes(x = long, y = lat, group = group),
+               color = "white", fill = 'gray') + 
+  guides(fill=FALSE) +
+  geom_point(data = map_sites,
+             aes(x=Longitude, y=Latitude,
+                 size = count,
+                 col = Data,
+                 shape = Data),
+             stroke = 1,
+             alpha = 0.75) +
+  geom_point(data = csr_rh_site,
+    aes(x=Longitude, y=Latitude, size = count),
+    col = "#F8766D", alpha = 0.75) +
+  scale_shape_manual(values = c(16, 17, 1, 4)) +
+  scale_x_continuous(name="Longitude", breaks=seq(-180,180, 60),labels = seq(-180,180, 60))+
+  scale_y_continuous(limits = c(-60, 90),name="Latitude", breaks=seq(-60,90,30),labels = seq(-60,90,30)) +
+  scale_size_continuous(name = "Years (n)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) -> site_plot1
+
+# only plot longterm sites
+ggplot(data = map_data("world", region = ".", exact = FALSE)) + 
+  geom_polygon(aes(x = long, y = lat, group = group),
+               color = "white", fill = 'gray') + 
+  guides(fill=FALSE) +
+  geom_point(data = longterm,
+             aes(x=Longitude, y=Latitude,
+                 size = count),
+             stroke = 1,
+             col = "blue", alpha = 0.75) +
+  scale_x_continuous(name="Longitude", breaks=seq(-180,180, 60),labels = seq(-180,180, 60))+
+  scale_y_continuous(limits = c(-60, 90),
+                     name="Latitude", breaks=seq(-60,90,30),
+                     labels = seq(-60,90,30)) +
+  scale_size_continuous(name = "Years (n)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) -> site_plot2
+site_plot2
+```
+
+## plot temperature annomaly
+
+```{r, fig.width=8, fig.height=6}
+# temperature annomaly time series
+PT_Del %>% 
+  ggplot(aes(Year, Tm_Annomaly)) +
+  geom_bar(stat = "identity", alpha = 0.85, fill = "white", color = "black") +
+  geom_smooth(color = "red", method = "lm", se = FALSE) +
+  geom_smooth(color = "blue", method = "loess", se = FALSE, linetype = 2) +
+  facet_wrap(~MiddleClimate, nrow = 4, scales = "free") +
+  labs(x = "Year (1961-2014)", 
+       y = expression(T[Air]~anomaly~(degree~C)))
+# ggsave("outputs/FigureSX. T anomaly.jpg", width = 8, height = 6, dpi = 300, units = "in")
+```
+
+## plot Rs time series linear model results
+
+```{r lm results}
+lm_results$first_b %>% mean()
+lm_results$n %>% mean()
+lm_results$first_b_tm %>% mean()
+
+
+lm_results %>% 
+  ggplot(aes(x=first_b_tm, y=first_b)) +
+  geom_point(aes(size = n), alpha = 0.75, col = "gray") +                        
+                      #创建一个基础的散点图。该散点图使用气温系数first_b_tm列的值作为 x 轴，使用 first_b 列的值作为 y 轴，并根据 n 列的值设置点的大小。
+  labs(x = expression(Slope~of~air~temperature~(degree~C~year^-1)),
+       y = expression(Slope~of~soil~respiration~(g~C~m^-2~year^-1))) +
+  
+  geom_hline(yintercept = 0, linetype = "dashed",                #geom_hline一条水平虚线，yintercept = 0 参数表示虚线的 y 坐标为 0，
+             color = "red", size = 1) +                  #linetype = “dashed” 样式为虚线，size 粗细为 1
+  geom_pointrange(aes(ymin = first_b - 2*first_b_se,              #使用 first_b 列的标准误差（first_b_se）的两倍，绘制了误差范围。
+                      ymax = first_b + 2*first_b_se),
+                  col = "gray",
+                  show.legend = FALSE) +                 #show.legend = FALSE 参数表示不显示误差范围的图例
+  geom_smooth(mapping = aes(x=first_b_tm, y=first_b),    #geom_smooth 线性回归线，lm_results 数据集中的 first_b_tm 列和 first_b 列拟合了线性模型
+              method = "lm",               #method = “lm” 参数表示使用线性回归方法拟合，se = T 参数表示显示回归线的标准误差
+              se = T, fill = "skyblue",
+              show.legend = FALSE) +
+  guides(size = guide_legend("Year (n)")) -> plot_lm_results    
+
+## add average dot
+lm_results_mean <- 
+  tibble(tm_slope_mean = lm_results$first_b_tm %>% mean(),
+         Rs_slope_mean = lm_results$first_b %>% mean(),
+         Rs_slope_se_mean = lm_results$first_b_se %>% mean(),
+         Year_mean = lm_results$n %>% mean())
+
+plot_lm_results +
+  geom_point(aes(x = tm_slope_mean, y = Rs_slope_mean),
+             col = "black", size = 3.5, data = lm_results_mean) +      #添加一个平均点，表示了斜率的平均值
+  geom_segment(aes(x = tm_slope_mean, y = Rs_slope_mean-2*Rs_slope_se_mean,
+                   xend = tm_slope_mean, yend = Rs_slope_mean+2*Rs_slope_se_mean),
+               col = "black", size = 1,
+               data = lm_results_mean) -> plot_lm_results             #误差线，平均标准误差
+
+plot_lm_results 
+
+lm(first_b ~ first_b_tm, data = lm_results) %>% summary()
+
+```
+
+## plot Rs time series linear model results
+
+### only plot results with p \< 0.05
+
+```{r lm plot2}
+lm_results %>% 
+  filter(p_b < 0.05 & first_b_tm > 0) -> lm_results_sub     #筛选99个站点中，rs斜率显著,tm斜率为正，10个站点
+
+lm_results_sub %>% 
+  ggplot(aes(x=first_b_tm, y=first_b)) +
+  geom_point(aes(size = n), alpha = 0.75, col = "gray") +
+  labs(x = expression(Slope~of~air~temperature~(degree~C~year^-1)),
+       y = expression(Slope~of~soil~respiration~(g~C~m^-2~year^-1))) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "red", size = 1) +
+  geom_pointrange(aes(ymin = first_b - 2*first_b_se,
+                      ymax = first_b + 2*first_b_se),
+                  col = "gray",
+                  show.legend = FALSE) +
+  geom_smooth(mapping = aes(x=first_b_tm, y=first_b),
+              method = "lm",
+              se = T, fill = "skyblue",
+              show.legend = FALSE) +
+  guides(size = guide_legend("Year (n)")) -> plot_lm_results_sub 
+
+lm(first_b ~ first_b_tm, data = lm_results_sub) %>% summary()
+
+## add average dot
+lm_results_mean_sub <- 
+  tibble(tm_slope_mean = lm_results_sub$first_b_tm %>% mean(),
+         Rs_slope_mean = lm_results_sub$first_b %>% mean(),
+         Rs_slope_se_mean = lm_results_sub$first_b_se %>% mean(),
+         Year_mean = lm_results_sub$n %>% mean())
+
+plot_lm_results_sub +
+  geom_point(aes(x = tm_slope_mean, y = Rs_slope_mean),
+             col = "black", size = 3.5, data = lm_results_mean_sub) +
+  geom_segment(aes(x = tm_slope_mean, y = Rs_slope_mean-2*Rs_slope_se_mean,
+                   xend = tm_slope_mean, yend = Rs_slope_mean+2*Rs_slope_se_mean),
+               col = "black", size = 1,
+               data = lm_results_mean_sub) -> plot_lm_results_sub
+
+plot_lm_results_sub
+
+```
+
+## Possible reason 1 - need long time (\~100 years) to observe a significant trend
+
+There are measure variations during soil respiration measuring activities, and the variabilitty could generally seperated into two types: measure variability from interannual variability and from instantaneous variability.
+
+### What's the SRDB interannual variability?
+
+```{r srdb, echo=FALSE}
+srdb_v5$Rs_interann_cv <- with(srdb_v5, Rs_interann_err / Rs_annual)
+median_interann_cv <- median(srdb_v5$Rs_interann_cv, na.rm = TRUE) #计算数据框（srdb_v5）中列（Rs_interann_cv）的中位数（median），并且忽略其中的缺失值（na.rm = TRUE）
+
+srdb_v5 %>% 
+  filter(!is.na(Rs_interann_cv)) -> srdb_v5_sub      #得到每年之间的变异系数 CV
+
+srdb_v5 %>% 
+  filter(!is.na(Rs_interann_cv)) %>% 
+  ggplot(aes(x = Rs_interann_cv)) + 
+  geom_histogram(bins = 30, fill = 'gray', col = "black") +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+  geom_vline(xintercept = median_interann_cv, color = "red") +         #xintercept = median_interann_cv 参数设置垂直线的 x 坐标为中位数的值
+  ylab("Count") + 
+  xlab("CV between successive years") ->
+  plot_annual_cv
+
+plot_annual_cv
+  
+# save_agu_plot("srdb_cv.png")
+
+```
+
+OK, so the median measurement error here is \~`r round(median_interann_cv * 100, 0)`% for `r nrow(srdb_v5_sub)` observations of fluxes between `r round(min(srdb_v5_sub$Rs_annual, na.rm = T))` and `r round(max(srdb_v5_sub$Rs_annual, na.rm = T))` g C/m2/year.
+
+### What's the CV within COSORE variability?
+
+```{r cv12, echo = FALSE}
+cosore_all %>% 
+  mutate(ID_day = paste0(dset, "-", CSR_PORT, "-", year(CSR_TIMESTAMP_END),"-",
+                         month(CSR_TIMESTAMP_END), "-", day(CSR_TIMESTAMP_END))) %>% 
+  group_by(ID_day) %>%
+  summarise(n = n(), meanFlux = mean(CSR_FLUX_CO2),
+            cv = sd(CSR_FLUX_CO2) / mean(CSR_FLUX_CO2)) %>% 
+  filter(n > 2) ->
+  meas_error_1
+median_error <- median(meas_error_1$cv)
+
+ggplot(meas_error_1, aes(x = cv)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  scale_x_continuous(labels = scales::percent, limits = c(-0.1, 1)) +
+  geom_vline(xintercept = median_error, color = "red") +
+  ylab("Count") + 
+  xlab("CV between successive IRGA measurements") -> plot_IRGA_cv
+
+plot_IRGA_cv
+# save_agu_plot("licor12_cv.png")           #IRGA 测量之间的变异系数
+```
+
+OK, so the median measurement error here is \~`r round(median_error * 100, 0)`% for `r nrow(meas_error_1)` observations of fluxes between `r round(min(meas_error_1$meanFlux), 2)` and `r round(max(meas_error_1$meanFlux), 2)` µmol/m2/s.
+
+## What if the meaure error was added to the soil respiration trend?
+
+### Need to use data from Jian et al (2017) Earth's Future paper replace Hashimoto's data
+
+```{r hashimoto, echo=FALSE}
+ #Downloaded August 25, 2017 from http://cse.ffpri.affrc.go.jp/shojih/data/index.html
+library(ncdf4) 
+
+ncfiles <- c("data/extdata/RH_yr_Hashimoto2015.nc",
+             "data/extdata/RS_yr_Hashimoto2015.nc")
+
+nc <- nc_open("data/extdata/RH_yr_Hashimoto2015.nc")  # change to [1]
+# These annual data start in 1901; extract 1901-2012, code updated to extract CO2 data from 1901 to 2012
+co2 <- ncvar_get(nc, "co2", start = c(1, 1, 1, 1), count = c(-1, -1, 1, 112))         #读取土壤异养呼吸数据1901-2012
+nc_close(nc)     #关闭文件
+
+lattice::levelplot(co2[,,1])   #将第一个时间步的土壤异养呼吸数据绘制成二维图
+
+
+co2 <- co2[400:600, 220:360,]  # punch a hole for testing: North America   #对CO2数据进行切片，保留北美洲地区的数
+# co2 <- co2[500:540, 320:360,]  # punch a hole for testing: part of North America
+
+# below is a function for time series analysis
+do_fitting <- function(co2) {    #do_fitting 用于进行时间序列分析。函数内部定义了函数f，用于对给定的时间序列进行线性拟合。
+  
+  f <- function(rh) { 
+    df <- data.frame(x = seq_along(rh), y = rh)  
+    tryCatch(lm(y ~ x, data = df), error = function(e) NA)
+  }
+  
+  # Fit linear model to each grid cell (this is slow) #在 do_fitting 函数中，通过将函数 f用于CO2数据的每个网格单元，得到了拟合模型的列表
+  mods_before <- apply(co2, c(1, 2), FUN = f)  # slow
+  
+  # Extract slopes   从拟合模型列表中提取斜率值，存储在 slopes 变量中
+  slopes_before <- apply(mods_before, c(1, 2), FUN = function(x) 
+    if(!is.na(x)) x[[1]]$coefficients[["x"]] else NA)
+  slopes_before <- matrix(slopes_before, nrow = nrow(mods_before), ncol = ncol(mods_before))
+  
+  # Extract slope p-values   从拟合模型列表中提取斜率的p值，存储在 signif 变量中。
+  signif_before <- apply(mods_before, c(1, 2), FUN = function(x) 
+    if(!is.na(x)) summary(x[[1]])$coefficients["x", "Pr(>|t|)"] else NA)
+  signif_before <- matrix(signif_before, nrow = nrow(mods_before), ncol = ncol(mods_before))
+  
+  return(list(slopes_before = slopes_before, signif_before = signif_before))
+}
+
+# fitting and store at out  对斜率进行统计摘要，输出摘要结果
+out <- do_fitting(co2)
+summary(as.vector(out$slopes_before))
+
+# plot out the fitting result  
+lattice::levelplot(out$slopes_before > 0)
+
+
+lattice::levelplot(out$signif_before < 0.05)  #将p值小于0.05的网格单元绘制成二维图。
+
+
+ncells_before <- sum(!is.na(out$slopes_before))
+pos_slope_before <- sum(out$slopes_before > 0, na.rm = TRUE)  
+signif_pos_slope_before <- sum(out$slopes_before > 0 & out$signif_before < 0.05, na.rm = TRUE)
+ #对斜率的统计进行进一步分析，计算非缺失斜率的网格单元数量、斜率大于0的网格单元数量以及斜率大于0且p值小于0.05的网格单元数量  10542L  9313  6230L  6230/10542=59.10%
+
+lat_weight_before <- abs(cos(seq(-pi/2, pi/2, length.out = nrow(out$slopes_before))))
+ncells_areawt_before <- sum(lat_weight_before * ncol(out$slopes_before))
+pos_slope_areawt_before <- sum(out$slopes_before > 0 * lat_weight_before, na.rm = TRUE)
+signif_pos_slope_areawt_before <- sum(out$slopes_before > 0 & out$signif_before < 0.05 * lat_weight_before, na.rm = TRUE)
+#计算纬度权重，用于统计非缺失斜率的网格单元数量乘以纬度权重与全球总纬度权重的乘积、斜率大于0的网格单元数量乘以纬度权重与全球总纬度权重的乘积以及斜率大于0且p值小于0.05的网格单元数量乘以纬度权重与全球总纬度权重的乘积  
+
+# plot histgram  绘制p值的直方图，分析时间序列趋势的显著性
+tibble(signif_before = as.vector(unlist(out$signif_before))) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = signif_before)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  # geom_vline(xintercept = 0.05, color = "red") +
+  ylab("Count") + 
+  xlab("p value of time series trend") ->
+  plot_signif_before
+
+plot_signif_before
+```
+
+Total cells = `r ncells`.
+
+Cells with positive slope = `r pos_slope` or `r round(pos_slope / ncells * 100, 0)`%.  
+9313/10542=88.34%    7265/10542=68.91%  interann:8385/10542=79.54%
+
+Cells with *significant* positive slope = `r signif_pos_slope` or `r round(signif_pos_slope / ncells * 100, 0)`%.  
+6230/10542=59.10%  1019/10542=9.67%  interann:2497/10542=23.69%
+
+Area with positive slope = `r round(pos_slope_areawt / ncells_areawt * 100, 0)`%.    
+9313/17952.31=51.88%  7265/266.76=  interann:8385/266.76
+
+Area with *significant* positive slope = `r round(signif_pos_slope_areawt / ncells_areawt * 100, 0)`%.  
+5877/17952.31=32.74%   466/266.79=     interann:2497/266.79=
+
+## Re-do analysis with assumed error rate
+
+```{r fuzz, echo=FALSE}
+#使用 fuzz 函数给CO2数据添加中值误差。将结果存储在名为 co2_fuzz 的变量中。
+#使用 do_fitting 函数对添加了误差后的CO2数据 co2_fuzz 进行拟合分析，将结果存储在 out_fuzz 中。
+#函数do_fitting 用于进行时间序列拟合分析。函数内部，定义了一个嵌套函数f，用于对给定的时间序列进行线性拟合。将输入的CO2数据切分成网格单元，并将 f 函数应用于每个网格单元的时间序列数据。f 函数使用线性回归（最小二乘法）对每个时间序列进行拟合，得到一个线性模型。然后，do_fitting 函数将所有拟合的模型存储在一个列表中，并返回该列表作为拟合结果。通过拟合分析，可以得到每个网格单元时间序列的斜率值。斜率表示CO2浓度随时间的变化趋势。do_fitting 函数还计算了斜率的p值，用于判断斜率是否显著不是零
+co2_fuzz <- fuzz(co2, error = median_error)  
+out_fuzz <- do_fitting(co2_fuzz)  #
+
+# Extract slopes
+slopes <- out_fuzz$slopes
+slopes[is.na(slopes)] <- NA
+slopes <- matrix(slopes, nrow = nrow(out_fuzz$slopes), ncol = ncol(out_fuzz$slopes))
+
+# Extract slope p-values
+signif <- out_fuzz$signif
+signif[is.na(signif)] <- NA
+signif <- matrix(signif, nrow = nrow(out_fuzz$signif), ncol = ncol(out_fuzz$signif))
+
+result <-(list(slopes = slopes, signif = signif))
+result
+
+# fitting and store at out  对斜率进行统计摘要，输出摘要结果
+out <- do_fitting(co2_fuzz)
+summary(as.vector(out$slopes))
+
+# plot out the fitting result  
+lattice::levelplot(out$slopes > 0)
+lattice::levelplot(out$signif < 0.05)  #将p值小于0.05的网格单元绘制成二维图。
+
+#使用 lattice 包的 levelplot 函数将斜率大于0\p值小于0.05的网格单元绘制成二维图。
+lattice::levelplot(out_fuzz$slopes > 0)
+lattice::levelplot(out_fuzz$signif < 0.05)
+
+# plot histgram after cv added
+tibble(signif = as.vector(unlist(out_fuzz$signif))) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = signif)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  # geom_vline(xintercept = 0.05, color = "red") +
+  ylab("Count") + 
+  xlab("p value of time series trend") ->
+  plot_signif_after
+plot_signif_after
+
+#计算非缺失斜率的网格单元数量、斜率大于0的网格单元数量以及斜率大于0且p值小于0.05的网格单元数量。
+#signif_pos_slope_before 6230(59.10%),添加中值误差后，signif_pos_slope 1022L(9.69%)
+ncells <- sum(!is.na(out_fuzz$slopes))
+pos_slope <- sum(out_fuzz$slopes > 0, na.rm = TRUE)
+signif_pos_slope <- sum(out_fuzz$slopes > 0 & out_fuzz$signif < 0.05, na.rm = TRUE)
+
+lat_weight <- abs(cos(seq(-pi/2, pi/2, length.co2_fuzz = nrow(co2_fuzz$slopes))))
+ncells_areawt <- sum(lat_weight * ncol(out_fuzz$slopes))
+pos_slope_areawt <- sum(out_fuzz$slopes > 0 * lat_weight, na.rm = TRUE)
+signif_pos_slope_areawt <- sum(out_fuzz$slopes > 0 & out_fuzz$signif < 0.05 * lat_weight, na.rm = TRUE)
+    #大于 0 的斜率且 p 值小于 0.05 的斜率（out_fuzz$slopes > 0 & out_fuzz$signif < 0.05）乘以纬度权重   lat_weight的总和，全球网格单元中时间序列斜率为正且显著的空间分布
+
+# Convert to a data frame for ggplot2 plotting
+ro = nrow(co2_fuzz)      #将 co2_fuzz 数据转换为向量形式
+co = ncol(co2_fuzz)
+yr = dim(co2_fuzz)[3]
+co2_fuzz_df <- tibble(
+  flux = as.vector(co2_fuzz),
+  lat = rep(seq_len(ro), times = co * yr),    #使用seq_len(ro) 函数进行重复
+  lon = rep(rep(seq_len(co), each = ro), times = yr),
+  year = rep(seq_len(yr), each = ro * co),
+  p = rep(as.vector(out_fuzz$signif), times = yr)  #out_fuzz$signif 数据转换为向量形式得到，并按照年份重复
+)                #创建 co2_fuzz_df 数据框来将拟合分析的结果存储为数据框，用于绘制图表。co2_fuzz     数据的维度信息被用于生成经纬度和年份的变量，并分别使用 rep 函数进行重复和连接
+
+co2_fuzz_df %>% 
+  filter(!is.na(p)) %>% 
+  # pick a subset of grid cells for a readable plot
+  distinct(lon, lat) %>%         #使用 distinct 函数根据经纬度变量 lon 和 lat 进行去重
+  sample_n(250) %>%             #使用 sample_n 函数随机选择 250 个网格单元
+  left_join(co2_fuzz_df, by = c("lon", "lat")) ->
+  co2_fuzz_subsampled
+
+co2_fuzz_subsampled %>% 
+  ggplot(aes(year + 1901, flux, group = paste(lat, lon))) +        #创建一个散点图，并使用 geom_line 函数绘制灰色线条表示整体的时间序列图
+  geom_line(color = "lightgrey") +
+  xlab("Year") + ylab(expression(R[S]~(g~C~m^{-2}~yr^{-1}))) +
+  geom_line(data = filter(co2_fuzz_subsampled, p < 0.05), color = "red", alpha = I(0.5)) ->
+  fuzz_time_series
+
+fuzz_time_series
+ save_agu_plot("fuzz_over_time.png")
+
+#先根据经纬度挑出加入了CV且p<0.05的 co2_fuzz_subsampled_points（2576/28000=9.2%），共有22个点：subsampled_points_locations 
+co2_fuzz_subsampled_points <- co2_fuzz_subsampled %>%
+  filter(p < 0.05) %>%
+  left_join(co2_fuzz_df, by = c("lon", "lat","flux"))
+
+unique_locations <- distinct(co2_fuzz_subsampled_points, lon, lat)
+num_locations <- nrow(unique_locations)
+```
+
+
+```{r fuzz_interannCV, echo=FALSE, message=TRUE, warning=TRUE}
+
+subsampled_points_locations <- distinct(co2_fuzz_subsampled_points, lon, lat)
+num_locations <- nrow(subsampled_points_locations)
+
+##fuzz_interannCV 
+
+fuzz_interannCV <- function(x, error) {
+  x * rnorm(length(x), mean = 1, sd = error)
+}
+co2_fuzz_interannCV <- fuzz_interannCV(co2, error=median_interann_cv)
+out_fuzz_interannCV <- do_fitting(co2_fuzz_interannCV)
+
+# Extract slopes
+slopes_interannCV <- out_fuzz_interannCV$slopes
+slopes_interannCV[is.na(slopes)] <- NA
+slopes_interannCV <- matrix(slopes_interannCV, nrow = nrow(out_fuzz_interannCV$slopes), ncol = ncol(out_fuzz_interannCV$slopes))
+
+# Extract slope p-values
+signif_interannCV <- out_fuzz_interannCV$signif
+signif_interannCV[is.na(signif)] <- NA
+signif_interannCV <- matrix(signif_interannCV, nrow = nrow(out_fuzz_interannCV$signif), ncol = ncol(out_fuzz_interannCV$signif))
+
+result_interannCV <-(list(slopes_interannCV = slopes, signif_interannCV = signif))
+result_interannCV
+
+# fitting and store at out  对斜率进行统计摘要，输出摘要结果
+out_fuzz_interannCV <- do_fitting(co2_fuzz_interannCV)
+summary(as.vector(out$slopes_interannCV))
+
+
+# plot out the fitting result  
+lattice::levelplot(result_interannCV$slopes_interannCV > 0)
+lattice::levelplot(result_interannCV$signif_interannCV < 0.05)  #将p值小于0.05的网格单元绘制成二维图。
+
+plot_signif_interannCV <- tibble(signif_interannCV = as.vector(unlist(out_fuzz_interannCV$signif))) %>%
+  na.omit() %>% 
+  ggplot(aes(x = signif_interannCV)) +
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  ylab("Count") +
+  xlab("p value of time series trend") 
+print(plot_signif_interannCV)
+save_agu_plot("plot_signif_interannCV.png")
+
+ncells_interannCV <- sum(!is.na(out_fuzz_interannCV$slopes))
+pos_slope_interannCV <- sum(out_fuzz_interannCV$slopes > 0, na.rm = TRUE)
+signif_pos_slope_interannCV <- sum(out_fuzz_interannCV$slopes > 0 & out_fuzz_interannCV$signif < 0.05, na.rm = TRUE)
+
+lat_weight_interannCV <- abs(cos(seq(-pi/2, pi/2, length.out_fuzz_interannCV = nrow(out_fuzz_interannCV$slopes))))
+ncells_areawt_interannCV <- sum(lat_weight_interannCV * ncol(out_fuzz_interannCV$slopes))
+pos_slope_areawt_interannCV <- sum(out_fuzz_interannCV$slopes > 0 * lat_weight_interannCV, na.rm = TRUE)
+signif_pos_slope_areawt_interannCV <- sum(out_fuzz_interannCV$slopes > 0 & out_fuzz_interannCV$signif < 0.05 * lat_weight_interannCV, na.rm = TRUE)
+
+# Convert to a data frame for ggplot2 plotting
+ro = nrow(co2_fuzz_interannCV)
+co = ncol(co2_fuzz_interannCV)
+yr = dim(co2_fuzz_interannCV)[3]
+co2_fuzz_interannCV_df <- tibble(
+  flux = as.vector(co2_fuzz_interannCV),
+  lat = rep(seq_len(ro), times = co_interann * yr),
+  lon = rep(rep(seq_len(co), each = ro_interann), times = yr),
+  year = rep(seq_len(yr), each = ro_interann * co_interann),
+  p = rep(as.vector(signif_interannCV), times = yr_interann)
+)
+
+co2_fuzz_interannCV_df %>%
+  filter(!is.na(p))
+  # pick a subset of grid cells for a readable plot
+ 
+co2_fuzz_interannCV_subsampled <- co2_fuzz_interannCV_df %>%
+  filter(!is.na(p)) %>%
+  distinct(lon, lat) %>% 
+  sample_n(250) %>% 
+  left_join(co2_fuzz_interannCV_df, by = c("lon", "lat"))
+
+  
+co2_fuzz_interannCV_subsampled %>% 
+  ggplot(aes(year + 1901, flux, group = paste(lat, lon))) + 
+  geom_line(color = "lightgrey") +
+  xlab("Year") + ylab(expression(R[S]~(g~C~m^{-2}~yr^{-1}))) +
+  geom_line(data = filter(co2_fuzz_interannCV_subsampled, p < 0.05), color = "red", alpha = I(0.5)) ->
+  co2_fuzz_interannCV_time_series
+print(co2_fuzz_interannCV_time_series)
+save_agu_plot("co2_fuzz_interannCV_time_series.png")
+
+#先根据经纬度挑出加入了CV且p<0.05的 co2_fuzz_interannCV_subsampled_points，共有22个点：subsampled_points_locations 
+co2_fuzz_interannCV_subsampled_points <- co2_fuzz_interannCV_subsampled %>%
+  filter(p < 0.05) %>%
+  left_join(co2_fuzz_interannCV_df, by = c("lon", "lat","flux"))
+
+unique_interannCV_locations <- distinct(co2_fuzz_interannCV_subsampled_points, lon, lat)
+num_interannCV_locations <- nrow(unique_interannCV_locations)
+
+
+```
+
+
+Cells with *significant* positive slope (observations with `r round(median_error * 100, 0)`% measurement error) = `r signif_pos_slope` or `r round(signif_pos_slope / ncells * 100, 0)`%.
+
+Area with *significant* positive slope = `r round(signif_pos_slope_areawt / ncells_areawt * 100, 0)`%.
+
+## Next steps
+
+Next: make a nice graph of change over time <br> using a subset of data for readability <br> Convert array to data frame and plot rs versus time <br> with a line for each grid cell <br>
+
+## Simple: when would expect to see significance? toy-example
+
+-   We'd like to do this once for perfect data
+-   Once for data + interannual variability
+-   Once for data + iav + observational error
+
+```{r simple toy-example, echo=FALSE}
+set.seed(1234)
+
+#trend_emergence 的函数，用于计算趋势的 p 值。函数的输入参数为 rd 和 theilsen（默认为 F，即 False）。在函数内部，首先创建了一个与输入数据 rd 长度相同的整数序列 Year，用于表示年份。
+trend_emergence <- function(rd, theilsen = F) {
+  Year <- seq_len(length(rd))    
+  trend_p <- rep(NA, length(rd))
+  for(i in seq_along(trend_p)) {             #seq_along(，创建一个与trend_p长度相同的整数向量，以便在后续的循环中使用
+    if(i > 2) {
+      if(theilsen) {
+        df <- tibble(Year = Year[1:i], rd = rd[1:i])       #for循环中，每次将数据框df的行数增加1，然后用mblm函数拟合回归模型。
+        suppressWarnings(m <- mblm::mblm(rd ~ Year, data = df))  # mblm doesn't like form below
+      } else {
+        m <- suppressWarnings(lm(rd[1:i] ~ Year[1:i]))         #suppressWarnings(忽略警告信息
+      }
+      # Extract 2nd row (Year) and 4th column (Pr>[t] or Pr>|V|)
+      trend_p[i] <- summary(m)$coefficients[2, 4]
+    }
+  }
+  trend_p
+}
+
+
+# Temperature has risen 0.9 C in 40 years, more or less
+dTdt <- round(0.9 / 40.0, 3)         
+q10 <- 2
+R0 = 1.0                             # dTdt（每年温度上升的值），q10（每 10 摄氏度温度变化引起呼吸速率变化的倍数）和 R0（初始呼吸速率）。
+respdata <- tibble(Year = 1:100, 
+                   Temp = dTdt * Year,                #温度的计算基于 dTdt 和年份之间的线性关系
+                   Resp = R0 * q10 ^ (Temp / 10),     #呼吸速率的计算基于初始呼吸速率以及温度和 q10 之间的指数关系
+                         # This is interannual variability
+                   Resp_iav = fuzz(Resp, 0.098),  # this is SRDB Rs_interannual_err  #考虑了年际变异性的呼吸速率（Resp_iav）   
+                   Resp_fuzz = fuzz(Resp_iav, median_error))    
+                         #使用 fuzz 函数为年际变异性呼吸速率添加了观测误差，得到了最终的呼吸速率数据（Resp_fuzz
+
+# Make a nice plot--first with ideal curve, 
+p <- ggplot(respdata, aes(Year, Resp)) +      #考虑了温度\ q10\年际变异性\观测误差的呼吸速率
+  geom_point(color = "grey") +  
+  ylab("Respiration") + coord_cartesian(ylim = c(0.75, 1.5)) +       #coord_cartesian 函数设置 y 轴坐标范围为 0.75 到 1.5
+  annotate("text", 10, 1.4, label = paste("Q10 =", q10)) + 
+  annotate("text", 10, 1.3, label = paste("dT/dt =", dTdt))   #使用 annotate 函数在坐标位置 (10, 1.4) 和 (10, 1.3) 添加标注参数 q10 和 dTdt 
+p
+
+# then IAV
+p <- p + geom_point(aes(y = Resp_iav))  
+          #在之前定义的绘图对象 p 的基础上使用 geom_point 函数添加新的点图层，将 y 映射设置为 Resp_iav(#考虑了年际变异性的呼吸速率（Resp_iav）)
+p
+
+# then observations
+p <- p + 
+  geom_errorbar(aes(ymin = Resp_iav - Resp_iav * median_error,
+                    ymax = Resp_iav + Resp_iav * median_error))
+       #在 p 的基础上再次使用 geom_errorbar 函数添加了观测误差的显示，设置 ymin 和 ymax
+p
+
+# add idea trend line
+p + geom_line(aes(y = Resp), color = "red", size = 2)
+
+# add line with interannual variability
+p + geom_line(aes(y = Resp), color = "pink", size = 2) +
+  geom_line(aes(y = Resp_iav), color = "red", size = 2)
+
+# add real soil respiration observation trend
+p + geom_line(aes(y = Resp), color = "pink", size = 2) +      
+          #pink line  Resp = R0 * q10 ^ (Temp / 10);  Temp = dTdt * Year,根据理想气温和假设的温度敏感性计算的土壤呼吸速率
+  geom_line(aes(y = Resp_iav), color = "pink", size = 2) +
+          #考虑了年际变异性的呼吸速率（Resp_iav）
+  geom_line(aes(y = Resp_fuzz), color = "red", size = 2)
+          #添加了观测误差得到最终的呼吸速率
+          
+# creat a function for trend analysis
+do_sim <- function(i, respdata, error = 0.0) {
+  # This is observational error
+  respdata$Resp_fuzz <- fuzz(respdata$Resp_iav, error)
+  respdata$trend_p <- trend_emergence(respdata$Resp_fuzz)
+  respdata
+}     # do_sim 函数，接受三个参数：i、respdata 和 error；在 respdata 数据框中添加了观测误差，并计算了趋势值；最后，返回修改后的 respdata。
+
+# run the analysis and store the results
+results <- list()
+library(parallel)
+n_sims <- 100
+results <- mclapply(seq_len(n_sims), do_sim, respdata, error = median_error)
+      #调用 mclapply 函数并行地运行 do_sim 函数多次，每次传递一个不同的 i 值和相同的 respdata 和 error 参数。其他并行计算函数，如 foreach 和 parallel::parLapply
+
+# summary results
+results %>% 
+  bind_rows %>% 
+  group_by(Year) %>%       #bind_rows 函数将 results 列表中的每个元素（即每次运行的结果）合并为一个数据框。 group_by 函数按照 Year 列对数据进行分组
+  summarise(n = n(),      
+            Temp = mean(Temp), 
+            Resp = mean(Resp),
+            Resp_iav_sd = sd(Resp_iav),
+            Resp_iav = mean(Resp_iav),
+            Resp_fuzz_sd = sd(Resp_fuzz),          
+            Resp_fuzz = mean(Resp_fuzz), 
+            trend_p_sd = sd(trend_p), 
+            trend_p = mean(trend_p)) %>% 
+  filter(!is.na(trend_p)) ->  
+  results_summary     #summarise 函数计算每个年份的统计指标，包括观测数目 n、平均温度 Temp、平均呼吸 Resp、呼吸的观测误差标准差 Resp_iav_sd、  平均观测误差 Resp_iav、  观测误差的标准差 Resp_fuzz_sd  、平均观测误差 Resp_fuzz、  趋势值的标准差 trend_p_sd 和  平均趋势值 trend_p。
+
+# plot the trend analysis result
+p_TheilSen <- ggplot(results_summary, aes(Year, trend_p, color = trend_p < 0.05)) +   
+  #使用 ggplot 函数创建一个基础图形，并设置 x 轴为 Year，y 轴为 trend_p。通过 geom_point 添加散点图并根据 trend_p < 0.05 进行颜色编码
+  geom_point() +    
+  geom_line(aes(y = Resp_fuzz)) +
+  geom_line(aes(y = Resp), color = "grey") +
+  geom_ribbon(aes(ymin = Resp_fuzz - Resp_fuzz_sd,      #使用 geom_ribbon 函数添加一个带有透明度的填充区域，设置填充区域上下边界的数值并根据 trend_p < 0.05 颜色和填充来表示趋势值的显著性。
+                  ymax = Resp_fuzz + Resp_fuzz_sd, 
+                  fill = trend_p < 0.05), color = NA, alpha = I(0.35)) +  
+                                    #color 参数设为 NA，以隐藏填充区域的边框颜色。alpha 参数设置透明度为 0.35
+  guides(color = FALSE, fill = FALSE) +     
+                              #guides 函数将图例中的颜色和填充隐藏，因为之前已经通过颜色和填充来表示趋势值的显著性
+  annotate("text", 10, 1.5, label = paste("N =", n_sims)) +
+  ylab("Theil-sen p-value   ///   Respiration")
+
+print(p_TheilSen)
+
+save_agu_plot("p_TheilSen.png")
+```
+
+```{r, fig.height=8, fig.width=8}
+# put figures together
+plot_grid(fuzz_time_series, p_TheilSen,
+          ncol = 1,
+          labels = c("a", "b"))
+```
+mblm 函数是 mblm 包中的函数，用于进行基于中位数的线性回归拟合。
+mblm 函数使用的是 Theil-Sen 方法，该方法是一种非参数的回归分析方法，它通过计算数据中的斜率中位数来估计回归模型的参数。与传统的最小二乘法不同，Theil-Sen 方法对异常值不敏感，并且能够在不需要假设数据分布情况下进行回归分析。
+lm 函数通过最小二乘法来估计回归模型的参数。它假设了数据服从正态分布，并尝试找到最优的参数估计，使得观测值与模型的预测值之间的残差平方和最小。
+
+在循环中，如果 theilsen 为 TRUE（即非零），则采用 Theil-Sen 方法拟合回归模型。首先，通过索引 i 将 Year 和 rd进行切片，创建一个子数据框 df，用于拟合回归模型。利用 mblm 函数拟合回归模型并将结果存储在 m 中。由于 mblm函数可能会生成警告信息，使用 suppressWarnings 函数来忽略这些警告。
+如果 theilsen 为 FALSE（即零），则采用简单的线性回归方法拟合回归模型。同样地，使用 lm函数拟合回归模型，并将结果存储在 m 中。同样地，使用 suppressWarnings 函数来忽略可能的警告。
+
+```{r, fig.height=8, fig.width=8}
+plot_grid(plot_IRGA_cv, plot_annual_cv) ->
+  plot_cv
+# put figures together
+plot_grid(plot_signif_before, plot_cv,plot_signif_interannCV, plot_signif_after,
+          ncol = 1,
+          labels = c("a", "b", "c", "d"))
+save_agu_plot("plot_IRGA_cv, plot_annual_cv.png")
+
+```
+
+We then analyzed the trend of annual RS time series for all grid cells (n=`r ncells`). The results turn out that about `r signif_pos_slope`% cells (Figure S7, panel a) showed a significant (p\<0.05) possitive trend. However, in the field experiment, measurement error should be considered. We obtained the annual RS interannual variability from the newest version of global soil respiration database (SRDB-V5). In addition, we obtained the instantaneous RS flux measurement variability from a community database for continuous soil respiration and other soil-atmosphere greenhouse gas flux data (COSORE23). The results show that RS interannual variability is about `r round(median_interann_cv,2)*100`% of annual RS, and instantaneous RS flux measurement variability is about `r round(median_error, 2)*100`% of measurement mean (Figure S7, panel b). When RS measurement variability was considered, only \~`r round (signif_pos_slope / ncells * 100, 0)`% (Figure S7, panel c) of cells showed a significant increase trend.
+
+
+```{r,MK_result message=TRUE, warning=TRUE}
+
+library(Kendall)
+
+do_mk_analysis <- function(co2) {
+  mk_test <- function(x) {
+    result <- MannKendall(x)
+    return(result)
+  }
+  
+  # Apply MK analysis to each grid cell
+  mk_mods <- mk_p_values <- apply(co2, c(1, 2), FUN = function(x) mk_test(x))
+  mk_p_values <- matrix(mk_p_values, nrow = nrow(co2), ncol = ncol(co2))
+  
+  return(mk_p_values)
+}
+
+mk_mods <- do_mk_analysis(co2)
+
+# Extract slopes
+mk_slopes <- apply(mk_mods, c(1, 2), FUN = function(x) {
+  if (!is.na(x)) {
+    return(x[[1]]$coefficients[["x"]])
+  } else {
+    return(NA)
+  }
+})
+
+mk_slopes <- ifelse(is.na(mk_slopes), 0, mk_slopes)
+mk_slopes <- matrix(mk_slopes, nrow = nrow(mk_mods), ncol = ncol(mk_mods), byrow = TRUE)
+
+mk_signif <- apply(mk_mods, c(1, 2), FUN = function(x) {
+  if (!is.na(x)) {
+    return(summary(x[[1]])$coefficients["x", "Pr(>|t|)"])
+  } else {
+    return(NA)
+  }
+})
+
+# If mk_signif is a list with NULL values, convert it to a matrix filled with NA
+if (inherits(mk_signif, "list") && all(sapply(mk_signif, is.null))) {
+  mk_signif <- matrix(NA, nrow = nrow(mk_mods), ncol = ncol(mk_mods), byrow = TRUE)
+} else {
+  mk_signif <- matrix(mk_signif, nrow = nrow(mk_mods), ncol = ncol(mk_mods), byrow = TRUE)
+}
+
+out <- list(mk_slopes = mk_slopes, mk_signif = mk_signif)
+# fitting and store at out
+mk_summary(as.vector(out$mk_slopes))
+
+# plot out the fitting result
+lattice::levelplot(out$mk_slopes > 0)
+
+lattice::levelplot(out$mk_signif < 0.05)
+
+mk_ncells <- sum(!is.na(out$mk_slopes))
+mk_pos_slope <- sum(out$mk_slopes > 0, na.rm = TRUE)
+mk_signif_pos_slope <- sum(out$mk_slopes > 0 & out$mk_signif < 0.05, na.rm = TRUE)
+
+mk_lat_weight <- abs(cos(seq(-pi/2, pi/2, length.out = nrow(out$mk_slopes))))
+mk_ncells_areawt <- sum(mk_lat_weight * ncol(out$mk_slopes))
+mk_pos_slope_areawt <- sum(out$mk_slopes > 0 * mk_lat_weight, na.rm = TRUE)
+mk_signif_pos_slope_areawt <- sum(out$mk_slopes > 0 & out$mk_signif < 0.05 * mk_lat_weight, na.rm = TRUE)
+
+# plot histogram
+library(ggplot2)
+library(dplyr)
+
+tibble(signif = as.vector(unlist(out$mk_signif))) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = signif)) + 
+  geom_histogram(bins = 30, fill = "gray", col = "black") +
+  ylab("Count") + 
+  xlab("p value of time series trend") ->
+  plot_signif_before
+
+plot_signif_before
+
+```

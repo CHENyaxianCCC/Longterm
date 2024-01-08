@@ -127,4 +127,6 @@ longtern_lm <- function (sdata_rs, sdata_tm) {
 fuzz <- function(x, error) {
   x * rnorm(length(x), mean = 1, sd = error)
 }
-
+fuzz_interannCV <- function(x, error) {
+  x * rnorm(length(x), mean = 1, sd = error)
+}
